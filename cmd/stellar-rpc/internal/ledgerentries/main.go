@@ -11,13 +11,19 @@ import (
 	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/db"
 )
 
+type LedgerKeyAndEntry struct {
+	Key                xdr.LedgerKey
+	Entry              xdr.LedgerEntry
+	LiveUntilLedgerSeq *uint32 // optional live-until ledger seq, when applicable.
+}
+
 type LedgerEntryGetter interface {
-	GetLedgerEntries(ctx context.Context, keys []xdr.LedgerKey) ([]db.LedgerKeyAndEntry, uint32, error)
+	GetLedgerEntries(ctx context.Context, keys []xdr.LedgerKey) ([]LedgerKeyAndEntry, uint32, error)
 }
 
 // NewLedgerEntryGetter creates a LedgerEntryGetter which obtains the latest known value of the given ledger entries
 func NewLedgerEntryGetter(coreClient interfaces.FastCoreClient,
-	latestLedgerReader db.LedgerEntryReader,
+	latestLedgerReader db.LedgerReader,
 ) LedgerEntryGetter {
 	return &coreLedgerEntryGetter{
 		coreClient: coreClient,
@@ -39,13 +45,13 @@ func NewLedgerEntryAtGetter(coreClient interfaces.FastCoreClient, atLedger uint3
 type coreLedgerEntryGetter struct {
 	coreClient         interfaces.FastCoreClient
 	atLedger           uint32
-	latestLedgerReader db.LedgerEntryReader
+	latestLedgerReader db.LedgerReader
 }
 
 func (c coreLedgerEntryGetter) GetLedgerEntries(
 	ctx context.Context,
 	keys []xdr.LedgerKey,
-) ([]db.LedgerKeyAndEntry, uint32, error) {
+) ([]LedgerKeyAndEntry, uint32, error) {
 	atLedger := c.atLedger
 	if atLedger == 0 {
 		var err error
@@ -60,7 +66,7 @@ func (c coreLedgerEntryGetter) GetLedgerEntries(
 		return nil, 0, fmt.Errorf("could not query captive core: %w", err)
 	}
 
-	result := make([]db.LedgerKeyAndEntry, 0, len(resp.Entries))
+	result := make([]LedgerKeyAndEntry, 0, len(resp.Entries))
 	for _, entry := range resp.Entries {
 		// This could happen if the user tries to fetch a ledger entry that
 		// doesn't exist, making it a 404 equivalent, so skip it.
@@ -80,7 +86,7 @@ func (c coreLedgerEntryGetter) GetLedgerEntries(
 		if err != nil {
 			return nil, 0, fmt.Errorf("could not obtain ledger key: %w", err)
 		}
-		newEntry := db.LedgerKeyAndEntry{
+		newEntry := LedgerKeyAndEntry{
 			Key:   key,
 			Entry: xdrEntry,
 		}
