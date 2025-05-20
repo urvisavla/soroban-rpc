@@ -194,7 +194,7 @@ func MustNew(cfg *config.Config, logger *supportlog.Entry) *Daemon {
 	}
 	daemon.ingestService = createIngestService(cfg, logger, daemon, feewindows, historyArchive)
 	daemon.preflightWorkerPool = createPreflightWorkerPool(cfg, logger, daemon)
-	daemon.jsonRPCHandler = mustCreateJSONRPCHandler(cfg, logger, daemon, feewindows)
+	daemon.jsonRPCHandler = createJSONRPCHandler(cfg, logger, daemon, feewindows)
 
 	daemon.setupHTTPServers(cfg)
 	daemon.registerMetrics()
@@ -316,7 +316,7 @@ func createPreflightWorkerPool(cfg *config.Config, logger *supportlog.Entry, dae
 	)
 }
 
-func mustCreateJSONRPCHandler(cfg *config.Config, logger *supportlog.Entry, daemon *Daemon,
+func createJSONRPCHandler(cfg *config.Config, logger *supportlog.Entry, daemon *Daemon,
 	feewindows *feewindow.FeeWindows,
 ) *internal.Handler {
 	var dataStoreLedgerReader rpcdatastore.LedgerReader
