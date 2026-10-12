@@ -12,9 +12,27 @@ libc = "0.2.147"
 anyhow = "1.0.75"
 serde_json = "1.0"
 
+# soroban-env-host 28.0.1 and 29.0.1 depend on different soroban-wasmi builds
+# (0.31.1-soroban.20.0.1 and 0.31.1-soroban.29.0.0). Cargo allows only one
+# semver-compatible version of a crate per source, so the previous host is
+# pinned by git to rs-soroban-env v28.0.1, the commit its crates.io 28.0.1
+# release was published from, which takes soroban-wasmi from git. The code
+# is identical to the crates.io 28.0.1 release.
+[workspace.dependencies.soroban-env-host-prev]
+package = "soroban-env-host"
+version = "=28.0.1"
+git = "https://github.com/stellar/rs-soroban-env"
+rev = "7a7629cfef0328881497d60089f9b8acf202a495"
+
 [workspace.dependencies.soroban-env-host-curr]
 package = "soroban-env-host"
 version = "=29.0.1"
+
+[workspace.dependencies.soroban-simulation-prev]
+package = "soroban-simulation"
+version = "=28.0.1"
+git = "https://github.com/stellar/rs-soroban-env"
+rev = "7a7629cfef0328881497d60089f9b8acf202a495"
 
 [workspace.dependencies.soroban-simulation-curr]
 package = "soroban-simulation"
