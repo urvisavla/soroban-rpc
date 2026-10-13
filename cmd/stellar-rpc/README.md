@@ -13,8 +13,24 @@ For example, you can build an application and have it send a transaction, get le
 ## Building Stellar-Core
 Stellar-RPC requires an instance of stellar-core binary on the same host. This is referred to as the `Captive Core`. 
 Since, we are building RPC from source, we recommend considering two approaches to get the stellar-core binary:
-- If saving time is top priority and your development machine is on a linux debian OS, then consider installing the 
-testnet release candidates from the [testing repository.](https://apt.stellar.org/pool/unstable/s/stellar-core/)
+- If saving time is top priority and your development machine is on a Debian-family Linux, then consider installing a
+prebuilt stellar-core package from the SDF apt repository (Ubuntu `xenial`, `bionic`, `focal`, `jammy` and `noble` are published):
+    - Add the repository and its signing key:
+        ```bash
+        sudo install -d -m 0755 /etc/apt/keyrings
+        sudo curl -fsSL -o /etc/apt/keyrings/SDF.asc https://apt.stellar.org/SDF.asc
+        sudo chmod a+r /etc/apt/keyrings/SDF.asc
+        echo "deb [signed-by=/etc/apt/keyrings/SDF.asc] https://apt.stellar.org $(lsb_release -cs) testing" \
+          | sudo tee /etc/apt/sources.list.d/SDF-testing.list
+        sudo apt-get update
+        ```
+    - List the available testnet release candidates and install the one you want:
+        ```bash
+        apt-cache policy stellar-core
+        sudo apt-get install stellar-core=<version>
+        ```
+    - Swap `testing` for `unstable` in the source above if you need a specific build that has not been promoted yet.
+      See the [installation guide](https://developers.stellar.org/docs/validators/admin-guide/installation) for more detail.
 - The recommended option is to compile the core source directly on your machine:
     - Clone the stellar-core repo:
         ```bash
