@@ -281,6 +281,17 @@ func coarsePredicates(rowQ sq.SelectBuilder, filters []eventquery.Filter) sq.Sel
 	eventTypes := make([]int, 0, len(filters))
 	var topics sq.Or
 	allContract, allType, allTopic := len(filters) > 0, len(filters) > 0, len(filters) > 0
+	// When every filter names a contract, the (contract_id, id) index bounds the
+	// scan far better than (topic1, id): common topics such as "transfer" match
+	// millions of rows per window. The unary plus hides topic1 from the planner
+	// so it cannot pick that index.
+	topicColPrefix := "+"
+	for i := range filters {
+		if len(filters[i].ContractID) == 0 {
+			topicColPrefix = ""
+			break
+		}
+	}
 	for i := range filters {
 		f := &filters[i]
 		if len(f.ContractID) == 0 {
@@ -296,7 +307,7 @@ func coarsePredicates(rowQ sq.SelectBuilder, filters []eventquery.Filter) sq.Sel
 		var ands sq.And
 		for col, topic := range f.Topics {
 			if len(topic) > 0 {
-				ands = append(ands, sq.Eq{fmt.Sprintf("topic%d", col+1): topic})
+				ands = append(ands, sq.Eq{fmt.Sprintf("%stopic%d", topicColPrefix, col+1): topic})
 			}
 		}
 		if len(ands) == 0 {
