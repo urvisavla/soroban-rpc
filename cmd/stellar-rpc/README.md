@@ -13,8 +13,8 @@ For example, you can build an application and have it send a transaction, get le
 ## Building Stellar-Core
 Stellar-RPC requires an instance of stellar-core binary on the same host. This is referred to as the `Captive Core`. 
 Since, we are building RPC from source, we recommend considering two approaches to get the stellar-core binary:
-- If saving time is top priority and your development machine is on a Debian-family Linux, then consider installing a
-prebuilt stellar-core package from the SDF apt repository (Ubuntu `xenial`, `bionic`, `focal`, `jammy` and `noble` are published):
+- If saving time is top priority and your development machine runs one of the supported Ubuntu releases, then consider installing a
+prebuilt stellar-core package from the SDF apt repository (`xenial`, `bionic`, `focal`, `jammy` and `noble` are published):
     - Add the repository and its signing key:
         ```bash
         sudo install -d -m 0755 /etc/apt/keyrings
