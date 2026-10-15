@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Breaking Changes
+* `getEvents` no longer returns the `inSuccessfulContractCall` field, deprecated since protocol 23 ([#1050](https://github.com/stellar/stellar-rpc/pull/1050)).
+
+### Added
+* Added Protocol 30 support. The preflight hosts have been rotated to soroban-env-host 30.0.0 (29.0.0 for the previous protocol) ([#1050](https://github.com/stellar/stellar-rpc/pull/1050)).
+
 ## [v29.0.0](https://github.com/stellar/stellar-rpc/compare/v28.0.1...v29.0.0)
 
 ### Added
