@@ -13,6 +13,7 @@ import (
 	supportlog "github.com/stellar/go-stellar-sdk/support/log"
 
 	v1config "github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv1/config"
+	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2"
 	v2config "github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2/config"
 )
 
@@ -74,6 +75,7 @@ type fakeEntry struct {
 	stdout, stderr bytes.Buffer
 	v1cfg          *v1config.Config
 	v2path         string
+	v2opts         rpcv2.Options
 	v2calls        int
 }
 
@@ -88,8 +90,9 @@ func (f *fakeEntry) run(args []string, env map[string]string, forced Mode) int {
 			f.v1cfg = cfg
 			return nil
 		},
-		startRPCv2: func(configPath string, _ v2config.FlagOverrides) error {
+		startRPCv2: func(configPath string, opts rpcv2.Options) error {
 			f.v2path = configPath
+			f.v2opts = opts
 			f.v2calls++
 			return nil
 		},
@@ -163,6 +166,9 @@ func TestRPCv2ConfigPath(t *testing.T) {
 			assert.Equal(t, 1, f.v2calls)
 			assert.Nil(t, f.v1cfg)
 			assert.Contains(t, f.stderr.String(), "rpcv2 mode")
+			require.NotNil(t, f.v2opts.Config, "the daemon must get the config the cli loaded")
+			assert.Equal(t, "/tmp/x", f.v2opts.Config.Storage.DefaultDataDir)
+			assert.NotNil(t, f.v2opts.Logger, "the daemon must get the logger the cli built")
 		})
 	}
 }

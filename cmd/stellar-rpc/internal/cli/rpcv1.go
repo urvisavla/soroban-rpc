@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/pelletier/go-toml"
 	"github.com/spf13/cobra"
 
 	supportlog "github.com/stellar/go-stellar-sdk/support/log"
@@ -39,23 +40,22 @@ func (e *Entry) rpcv1Command(logger *supportlog.Entry, runErr *error) (*cobra.Co
 	return root, nil
 }
 
-func (e *Entry) runRPCv1(cmd *cobra.Command, cfg *v1config.Config, logger *supportlog.Entry) error {
-	path, err := e.configPath(cmd, ModeRPCv1)
-	if err != nil {
-		return err
-	}
-	if path != "" {
-		table, err := rpcv2TableIn(path)
+func (e *Entry) runRPCv1(_ *cobra.Command, cfg *v1config.Config, logger *supportlog.Entry) error {
+	// The file is read once. The shape check looks at the tree before the
+	// config takes values from it.
+	loadTOML := func(path string) (*toml.Tree, error) {
+		tree, err := toml.LoadFile(path)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if table != "" {
+		if table := rpcv2TableIn(tree); table != "" {
 			logger.WithFields(supportlog.F{"config_path": path, "table": table}).
 				Error("the config file is a rpcv2 config; " + ModeRPCv1.howToSwitch())
-			return errLogged
+			return nil, errLogged
 		}
+		return tree, nil
 	}
-	if err := cfg.SetValues(e.rpcv1LookupEnv()); err != nil {
+	if err := cfg.SetValuesWithLoader(e.rpcv1LookupEnv(), loadTOML); err != nil {
 		return err
 	}
 	// The daemon sets the same level and format again in setupLogger. Doing

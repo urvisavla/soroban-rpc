@@ -15,7 +15,7 @@ import (
 	supportlog "github.com/stellar/go-stellar-sdk/support/log"
 
 	v1config "github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv1/config"
-	v2config "github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2/config"
+	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2"
 	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/version"
 )
 
@@ -34,7 +34,7 @@ type Entry struct {
 
 	// Tests replace the two daemon launches with recorders.
 	startRPCv1 func(cfg *v1config.Config, logger *supportlog.Entry) error
-	startRPCv2 func(configPath string, flags v2config.FlagOverrides) error
+	startRPCv2 func(configPath string, opts rpcv2.Options) error
 }
 
 // genConfigFileUse is the subcommand that prints the mode's compiled defaults.
@@ -111,7 +111,7 @@ func (e *Entry) rootCommand(mode Mode, logger *supportlog.Entry, runErr *error) 
 	var root *cobra.Command
 	var err error
 	if mode == ModeRPCv2 {
-		root = e.rpcv2Command(logger, runErr)
+		root = e.rpcv2Command(runErr)
 	} else {
 		root, err = e.rpcv1Command(logger, runErr)
 		if err != nil {

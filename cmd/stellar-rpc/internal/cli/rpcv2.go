@@ -19,14 +19,14 @@ import (
 	v2config "github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2/config"
 )
 
-func (e *Entry) rpcv2Command(logger *supportlog.Entry, runErr *error) *cobra.Command {
+func (e *Entry) rpcv2Command(runErr *error) *cobra.Command {
 	var printRuntimeConfig bool
 
 	root := &cobra.Command{
 		Use:   "stellar-rpc",
 		Short: "Run the full-history streaming ingestion daemon (rpcv2)",
 		Run: func(cmd *cobra.Command, _ []string) {
-			*runErr = e.runRPCv2(cmd, logger, printRuntimeConfig)
+			*runErr = e.runRPCv2(cmd, printRuntimeConfig)
 		},
 	}
 	root.Flags().String(ConfigPathFlag, "",
@@ -51,7 +51,7 @@ func (e *Entry) rpcv2Command(logger *supportlog.Entry, runErr *error) *cobra.Com
 	return root
 }
 
-func (e *Entry) runRPCv2(cmd *cobra.Command, logger *supportlog.Entry, printRuntimeConfig bool) error {
+func (e *Entry) runRPCv2(cmd *cobra.Command, printRuntimeConfig bool) error {
 	path, err := e.configPath(cmd, ModeRPCv2)
 	if err != nil {
 		return err
@@ -59,16 +59,24 @@ func (e *Entry) runRPCv2(cmd *cobra.Command, logger *supportlog.Entry, printRunt
 	if path == "" {
 		return errors.New("rpcv2 mode needs a config file: pass --" + ConfigPathFlag + " or set " + ConfigPathEnv)
 	}
+	// The file is read once, here. The daemon gets the loaded config.
+	cfg, err := v2config.LoadConfigWithFlags(path, cmd.Flags())
+	if err != nil {
+		return err
+	}
 	if printRuntimeConfig {
-		cfg, err := v2config.LoadConfigWithFlags(path, cmd.Flags())
-		if err != nil {
-			return err
-		}
 		return printTOML(cmd, cfg)
 	}
+	// One logger for the whole process: the daemon's, built from [logging],
+	// so these startup lines come out in the operator's level and format.
+	logger, err := rpcv2.NewLogger(cfg.Logging)
+	if err != nil {
+		return err
+	}
+	logger.SetOutput(e.Stderr)
 	e.logIgnoredRPCv1Env(logger)
 	logger.WithField("mode", ModeRPCv2.String()).Info("starting in rpcv2 mode; " + ModeRPCv2.howToSwitch())
-	return e.startRPCv2(path, cmd.Flags())
+	return e.startRPCv2(path, rpcv2.Options{Config: &cfg, Logger: logger, Flags: cmd.Flags()})
 }
 
 // logIgnoredRPCv1Env lists the rpcv1 environment variables that are set.
@@ -102,9 +110,9 @@ func printTOML(cmd *cobra.Command, cfg v2config.Config) error {
 	return nil
 }
 
-func startRPCv2Daemon(configPath string, flags v2config.FlagOverrides) error {
+func startRPCv2Daemon(configPath string, opts rpcv2.Options) error {
 	// Cancel the daemon on SIGINT/SIGTERM for a clean shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return rpcv2.RunDaemon(ctx, configPath, flags)
+	return rpcv2.RunDaemonWithOptions(ctx, configPath, opts)
 }

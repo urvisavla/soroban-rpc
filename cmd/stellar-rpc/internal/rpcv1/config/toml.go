@@ -19,7 +19,10 @@ func parseToml(r io.Reader, strict bool, cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	return applyTree(tree, strict, cfg)
+}
 
+func applyTree(tree *toml.Tree, strict bool, cfg *Config) error {
 	validKeys := map[string]struct{}{}
 	for _, option := range cfg.options() {
 		key, ok := option.getTomlKey()

@@ -15,18 +15,14 @@ func rpcv2Tables() []string {
 }
 
 // rpcv2TableIn returns the first rpcv2 table found among the top-level keys
-// of the TOML file at path, or "" when the file has none. rpcv1 ignores
-// unknown keys unless strict parsing is on, so without this check a rpcv2
-// file starts rpcv1 with every value at its default.
-func rpcv2TableIn(path string) (string, error) {
-	tree, err := toml.LoadFile(path)
-	if err != nil {
-		return "", err
-	}
+// of a loaded TOML tree, or "" when it has none. rpcv1 ignores unknown keys
+// unless strict parsing is on, so without this check a rpcv2 file starts
+// rpcv1 with every value at its default.
+func rpcv2TableIn(tree *toml.Tree) string {
 	for _, table := range rpcv2Tables() {
 		if tree.HasPath([]string{table}) {
-			return table, nil
+			return table
 		}
 	}
-	return "", nil
+	return ""
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -36,17 +37,9 @@ func TestRPCv2TableIn(t *testing.T) {
 		{name: "uppercase is not an rpcv2 table", content: "[SERVICE]\nendpoint = \"x\"\n", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := rpcv2TableIn(writeFile(t, "cfg.toml", tc.content))
+			tree, err := toml.Load(tc.content)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, rpcv2TableIn(tree))
 		})
 	}
-}
-
-func TestRPCv2TableInReportsReadErrors(t *testing.T) {
-	_, err := rpcv2TableIn("/nonexistent/config.toml")
-	require.Error(t, err)
-
-	_, err = rpcv2TableIn(writeFile(t, "bad.toml", "= not toml\n"))
-	require.Error(t, err)
 }
