@@ -15,23 +15,23 @@ import (
 )
 
 // binaryPath is the stellar-rpc binary TestMain builds once for the tests
-// below. binaryErr says why the build failed, if it did.
+// below. errBinaryBuild says why the build failed, if it did.
 var (
-	binaryPath string
-	binaryErr  error
+	binaryPath     string
+	errBinaryBuild error
 )
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "stellar-rpc-cli-test")
 	if err != nil {
-		binaryErr = err
+		errBinaryBuild = err
 		os.Exit(m.Run())
 	}
 	binaryPath = filepath.Join(dir, "stellar-rpc")
 	build := exec.CommandContext(context.Background(), "go", "build", "-o", binaryPath,
 		"github.com/stellar/stellar-rpc/cmd/stellar-rpc")
 	if out, err := build.CombinedOutput(); err != nil {
-		binaryErr = fmt.Errorf("go build ./cmd/stellar-rpc: %w\n%s", err, out)
+		errBinaryBuild = fmt.Errorf("go build ./cmd/stellar-rpc: %w\n%s", err, out)
 	}
 	code := m.Run()
 	os.RemoveAll(dir)
@@ -42,7 +42,7 @@ func TestMain(m *testing.M) {
 // combined stdout and stderr.
 func runBinary(t *testing.T, env []string, args ...string) (int, string) {
 	t.Helper()
-	require.NoError(t, binaryErr)
+	require.NoError(t, errBinaryBuild)
 	cmd := exec.CommandContext(t.Context(), binaryPath, args...)
 	// Drop the mode and config variables so the developer's shell cannot pick
 	// the mode or the config file for the test.

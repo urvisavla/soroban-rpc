@@ -13,10 +13,9 @@ import (
 
 func TestRPCv2TablesMatchTheConfigStruct(t *testing.T) {
 	var fromStruct []string
-	typ := reflect.TypeOf(v2config.Config{})
-	for i := range typ.NumField() {
-		tag, _, _ := strings.Cut(typ.Field(i).Tag.Get("toml"), ",")
-		require.NotEmpty(t, tag, "field %s has no toml tag", typ.Field(i).Name)
+	for field := range reflect.TypeFor[v2config.Config]().Fields() {
+		tag, _, _ := strings.Cut(field.Tag.Get("toml"), ",")
+		require.NotEmpty(t, tag, "field %s has no toml tag", field.Name)
 		fromStruct = append(fromStruct, tag)
 	}
 	assert.Equal(t, fromStruct, rpcv2Tables())
