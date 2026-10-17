@@ -52,7 +52,7 @@ func (e *Entry) rpcv2Command(runErr *error) *cobra.Command {
 }
 
 func (e *Entry) runRPCv2(cmd *cobra.Command, printRuntimeConfig bool) error {
-	path, err := e.configPath(cmd, ModeRPCv2)
+	path, err := e.configPath(cmd)
 	if err != nil {
 		return err
 	}
@@ -75,8 +75,22 @@ func (e *Entry) runRPCv2(cmd *cobra.Command, printRuntimeConfig bool) error {
 	}
 	logger.SetOutput(e.Stderr)
 	e.logIgnoredRPCv1Env(logger)
-	logger.WithField("mode", ModeRPCv2.String()).Info("starting in rpcv2 mode; " + ModeRPCv2.howToSwitch())
-	return e.startRPCv2(path, rpcv2.Options{Config: &cfg, Logger: logger, Flags: cmd.Flags()})
+	logger.WithField("mode", ModeRPCv2.String()).Info("starting in rpcv2 mode" + e.switchHint(ModeRPCv2, "; %s"))
+	// Flags are already applied to cfg, so the daemon gets only the config.
+	return e.startRPCv2(path, rpcv2.Options{Config: &cfg, Logger: logger})
+}
+
+// configPath resolves the rpcv2 config file: the flag, then
+// STELLAR_RPC_CONFIG_PATH. An empty result means no file. rpcv1 resolves its
+// own path through its config package and rpcv1LookupEnv.
+func (e *Entry) configPath(cmd *cobra.Command) (string, error) {
+	if cmd.Flags().Changed(ConfigPathFlag) {
+		return cmd.Flags().GetString(ConfigPathFlag)
+	}
+	if path, ok := e.LookupEnv(ConfigPathEnv); ok {
+		return path, nil
+	}
+	return "", nil
 }
 
 // logIgnoredRPCv1Env lists the rpcv1 environment variables that are set.

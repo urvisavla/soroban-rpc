@@ -159,7 +159,7 @@ func (cfg *Config) SetValuesWithLoader(
 		if err != nil {
 			return err
 		}
-		if err := cfg.loadTree(tree); err != nil {
+		if err := applyTree(tree, cfg.Strict, cfg); err != nil {
 			return err
 		}
 
@@ -222,14 +222,6 @@ func (cfg *Config) loadFlags() error {
 		}
 	}
 	return nil
-}
-
-// loadTree takes the config values from a loaded toml tree. Strict mode will
-// return an error if there are any unknown toml variables set. Note,
-// strict-mode can also be set by putting `STRICT=true` in the config.toml file
-// itself.
-func (cfg *Config) loadTree(tree *toml.Tree) error {
-	return applyTree(tree, cfg.Strict, cfg)
 }
 
 func (cfg *Config) Validate() error {

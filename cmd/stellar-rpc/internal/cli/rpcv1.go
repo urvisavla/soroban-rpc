@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pelletier/go-toml"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	supportlog "github.com/stellar/go-stellar-sdk/support/log"
@@ -12,8 +13,14 @@ import (
 	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv1/daemon"
 )
 
-func (e *Entry) rpcv1Command(logger *supportlog.Entry, runErr *error) (*cobra.Command, error) {
+func (e *Entry) rpcv1Command(runErr *error) (*cobra.Command, error) {
 	var cfg v1config.Config
+
+	// rpcv1's logger, before the config is read: the shape refusal below logs
+	// through it. rpcv2 builds its own from [logging] once its file is loaded.
+	logger := supportlog.New()
+	logger.SetLevel(logrus.InfoLevel)
+	logger.SetOutput(e.Stderr)
 
 	root := &cobra.Command{
 		Use:   "stellar-rpc",
@@ -50,7 +57,7 @@ func (e *Entry) runRPCv1(_ *cobra.Command, cfg *v1config.Config, logger *support
 		}
 		if table := rpcv2TableIn(tree); table != "" {
 			logger.WithFields(supportlog.F{"config_path": path, "table": table}).
-				Error("the config file is a rpcv2 config; " + ModeRPCv1.howToSwitch())
+				Error("the config file is a rpcv2 config" + e.switchHint(ModeRPCv1, "; %s"))
 			return nil, errLogged
 		}
 		return tree, nil
@@ -64,7 +71,7 @@ func (e *Entry) runRPCv1(_ *cobra.Command, cfg *v1config.Config, logger *support
 	if cfg.LogFormat == v1config.LogFormatJSON {
 		logger.UseJSONFormatter()
 	}
-	logger.WithField("mode", ModeRPCv1.String()).Info("starting in rpcv1 mode; " + ModeRPCv1.howToSwitch())
+	logger.WithField("mode", ModeRPCv1.String()).Info("starting in rpcv1 mode" + e.switchHint(ModeRPCv1, "; %s"))
 	return e.startRPCv1(cfg, logger)
 }
 

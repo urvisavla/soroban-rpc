@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	supportlog "github.com/stellar/go-stellar-sdk/support/log"
@@ -58,12 +57,8 @@ func (e *Entry) Run() int {
 		}
 	}
 
-	logger := supportlog.New()
-	logger.SetLevel(logrus.InfoLevel)
-	logger.SetOutput(e.Stderr)
-
 	var runErr error
-	root, err := e.rootCommand(mode, logger, &runErr)
+	root, err := e.rootCommand(mode, &runErr)
 	if err != nil {
 		fmt.Fprintf(e.Stderr, "could not parse config options: %v\n", err)
 		return 1
@@ -107,13 +102,13 @@ func (e *Entry) fillDefaults() {
 
 // rootCommand builds the command tree of one mode only, so --help shows one
 // mode and a flag of the other mode is an unknown flag.
-func (e *Entry) rootCommand(mode Mode, logger *supportlog.Entry, runErr *error) (*cobra.Command, error) {
+func (e *Entry) rootCommand(mode Mode, runErr *error) (*cobra.Command, error) {
 	var root *cobra.Command
 	var err error
 	if mode == ModeRPCv2 {
 		root = e.rpcv2Command(runErr)
 	} else {
-		root, err = e.rpcv1Command(logger, runErr)
+		root, err = e.rpcv1Command(runErr)
 		if err != nil {
 			return nil, err
 		}
@@ -124,32 +119,24 @@ func (e *Entry) rootCommand(mode Mode, logger *supportlog.Entry, runErr *error) 
 		root.PersistentFlags().Bool(EnableRPCv2Flag, mode == ModeRPCv2,
 			"run the rpcv2 full-history daemon instead of rpcv1 ("+EnableRPCv2Env+")")
 	}
-	root.AddCommand(versionCommand(mode))
+	root.AddCommand(e.versionCommand(mode))
 	return root, nil
 }
 
-func versionCommand(mode Mode) *cobra.Command {
+func (e *Entry) versionCommand(mode Mode) *cobra.Command {
 	cmd := version.NewCommand()
 	cmd.PostRun = func(cmd *cobra.Command, _ []string) {
-		fmt.Fprintf(cmd.OutOrStdout(), "mode: %s (%s)\n", mode, mode.howToSwitch())
+		fmt.Fprintf(cmd.OutOrStdout(), "mode: %s%s\n", mode, e.switchHint(mode, " (%s)"))
 	}
 	return cmd
 }
 
-// configPath resolves the config file the same way in both modes: the flag,
-// then STELLAR_RPC_CONFIG_PATH, then, in rpcv1 mode only, the old
-// SOROBAN_RPC_CONFIG_PATH. An empty result means no file.
-func (e *Entry) configPath(cmd *cobra.Command, mode Mode) (string, error) {
-	if cmd.Flags().Changed(ConfigPathFlag) {
-		return cmd.Flags().GetString(ConfigPathFlag)
+// switchHint tells an operator how to select the other mode, laid out with
+// format. It is empty when the mode was forced by a wrapper: the wrappers do
+// not register --enable-rpcv2, so the advice would fail there.
+func (e *Entry) switchHint(mode Mode, format string) string {
+	if e.ForcedMode != 0 {
+		return ""
 	}
-	if path, ok := e.LookupEnv(ConfigPathEnv); ok {
-		return path, nil
-	}
-	if mode == ModeRPCv1 {
-		if path, ok := e.LookupEnv(legacyConfigPathEnv); ok {
-			return path, nil
-		}
-	}
-	return "", nil
+	return fmt.Sprintf(format, mode.howToSwitch())
 }

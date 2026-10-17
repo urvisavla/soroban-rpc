@@ -295,6 +295,18 @@ func TestForcedMode(t *testing.T) {
 		assert.NotNil(t, f.v1cfg)
 		assert.Equal(t, 0, f.v2calls)
 	})
+
+	t.Run("wrappers do not advise a flag they do not have", func(t *testing.T) {
+		f := &fakeEntry{}
+		require.Equal(t, 0, f.run([]string{versionUse}, nil, ModeRPCv2), f.stderr.String())
+		assert.Contains(t, f.stdout.String(), "mode: rpcv2\n")
+		assert.NotContains(t, f.stdout.String(), enableFlag)
+
+		f = &fakeEntry{}
+		require.Equal(t, 1, f.run([]string{configPathFlag, path}, nil, ModeRPCv1))
+		assert.Contains(t, f.stderr.String(), "the config file is a rpcv2 config")
+		assert.NotContains(t, f.stderr.String(), enableFlag)
+	})
 }
 
 func TestOnlyTheSelectedModeFlagsExist(t *testing.T) {
