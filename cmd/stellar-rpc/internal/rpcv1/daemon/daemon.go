@@ -235,13 +235,18 @@ func MustNew(cfg *config.Config, logger *supportlog.Entry) *Daemon {
 		// Top-up frontfill after finalize so captive core starts nearer the live tip
 		daemon.mustBackfill(cfg, feewindows)
 	}
-	// Start ingestion service only after backfill is complete
-	daemon.ingestService.Start(ingestCfg)
 
 	daemon.preflightWorkerPool = createPreflightWorkerPool(cfg, logger, daemon)
 	daemon.jsonRPCHandler = createJSONRPCHandler(cfg, logger, daemon, feewindows)
 
+	// Bind the ports before ingestion starts. A port already in use then
+	// fails startup before captive core launches, so no stellar-core process
+	// is left behind.
 	daemon.setupHTTPServers(cfg)
+
+	// Start ingestion service only after backfill is complete
+	daemon.ingestService.Start(ingestCfg)
+
 	daemon.registerMetrics()
 
 	return daemon
@@ -271,6 +276,7 @@ func setupLogger(cfg *config.Config, logger *supportlog.Entry) *supportlog.Entry
 	logger.WithFields(supportlog.F{
 		versionLabel: version.Version,
 		commitLabel:  version.CommitHash,
+		"mode":       "rpcv1",
 	}).Info("starting Stellar RPC")
 	return logger
 }

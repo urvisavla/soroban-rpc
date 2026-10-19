@@ -31,6 +31,7 @@ import (
 	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2/ingest"
 	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2/observability"
 	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/rpcv2/query"
+	"github.com/stellar/stellar-rpc/cmd/stellar-rpc/internal/version"
 )
 
 // RunDaemon is the full-history daemon's process entrypoint: load config, lock
@@ -150,6 +151,13 @@ func runDaemonWith(ctx context.Context, configPath string, opts daemonOptions) e
 			return err
 		}
 	}
+	// One binary runs both daemons, so the process name no longer says which
+	// one this is. The mode field does.
+	logger.WithFields(supportlog.F{
+		"version": version.Version,
+		"commit":  version.CommitHash,
+		"mode":    "rpcv2",
+	}).Info("starting Stellar RPC")
 
 	paths := cfg.ResolvePaths()
 
