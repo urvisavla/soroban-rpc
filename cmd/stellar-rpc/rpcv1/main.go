@@ -9,6 +9,6 @@ import (
 )
 
 func main() {
-	entry := cli.Entry{ForcedMode: cli.ModeRPCv1}
+	entry := cli.Entry{}
 	os.Exit(entry.Run())
 }

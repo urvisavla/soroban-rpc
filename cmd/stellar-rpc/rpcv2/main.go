@@ -9,6 +9,6 @@ import (
 )
 
 func main() {
-	entry := cli.Entry{ForcedMode: cli.ModeRPCv2}
+	entry := cli.Entry{Args: append([]string{"--" + cli.EnableRPCv2Flag}, os.Args[1:]...)}
 	os.Exit(entry.Run())
 }
