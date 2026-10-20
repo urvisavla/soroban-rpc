@@ -39,6 +39,11 @@ func maxTxPageLimit() uint {
 	return *servingConfig().Service.Methods.GetTransactions.MaxItemsPerResponse
 }
 
+// maxEventsLimit is the daemon's default queryEvents cap.
+func maxEventsLimit() uint {
+	return *servingConfig().Service.Methods.QueryEvents.MaxItemsPerResponse
+}
+
 // readServer serves the daemon's read methods through the daemon's JSON-RPC
 // bridge, in process and without HTTP. A call's latency covers the bridge's
 // request parse, the wait for a handler slot, the handler and the response
@@ -64,15 +69,45 @@ func (s *readServer) close() { s.bridge.Close() }
 // bridge's ServeHTTP is timed. A successful response body is not decoded: the
 // handler reports its result's item count through the request context.
 func (s *readServer) call(ctx context.Context, method string, params any) (requestTiming, error) {
+	_, res, latency, err := s.send(ctx, method, params)
+	if err != nil {
+		return requestTiming{}, err
+	}
+	return requestTiming{latency: latency, handlerLatency: res.latency, items: res.items}, nil
+}
+
+// callResult sends one request and decodes its result into out. It is not a
+// measured request.
+func (s *readServer) callResult(ctx context.Context, method string, params, out any) error {
+	w, _, _, err := s.send(ctx, method, params)
+	if err != nil {
+		return err
+	}
+	var rsp rpcResponse
+	if err := json.Unmarshal(w.body.Bytes(), &rsp); err != nil {
+		return fmt.Errorf("decode %s response: %w", method, err)
+	}
+	if err := json.Unmarshal(rsp.Result, out); err != nil {
+		return fmt.Errorf("decode %s result: %w", method, err)
+	}
+	return nil
+}
+
+// send sends one request through the bridge and returns the response, what the
+// handler recorded and the bridge's run time. It fails unless the handler
+// succeeded and the bridge wrote its result.
+func (s *readServer) send(
+	ctx context.Context, method string, params any,
+) (*responseBuffer, handlerResult, time.Duration, error) {
 	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: rpcRequestID, Method: method, Params: params})
 	if err != nil {
-		return requestTiming{}, fmt.Errorf("encode %s request: %w", method, err)
+		return nil, handlerResult{}, 0, fmt.Errorf("encode %s request: %w", method, err)
 	}
 	var res handlerResult
 	req, err := http.NewRequestWithContext(context.WithValue(ctx, handlerResultKey{}, &res),
 		http.MethodPost, "/", bytes.NewReader(body))
 	if err != nil {
-		return requestTiming{}, fmt.Errorf("build %s request: %w", method, err)
+		return nil, handlerResult{}, 0, fmt.Errorf("build %s request: %w", method, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	w := &responseBuffer{header: http.Header{}}
@@ -84,9 +119,9 @@ func (s *readServer) call(ctx context.Context, method string, params any) (reque
 	// The prefix check catches a response the bridge turned into an error
 	// after the handler returned, such as a result that failed to encode.
 	if w.status == http.StatusOK && res.ran && res.err == nil && bytes.HasPrefix(w.body.Bytes(), rpcSuccessPrefix) {
-		return requestTiming{latency: latency, handlerLatency: res.latency, items: res.items}, nil
+		return w, res, latency, nil
 	}
-	return requestTiming{}, responseError(ctx, method, w)
+	return nil, handlerResult{}, 0, responseError(ctx, method, w)
 }
 
 // responseError returns the error that the failed response in w reports. A
@@ -156,14 +191,22 @@ func timeHandler(h jrpc2.Handler) jrpc2.Handler {
 	}
 }
 
-// itemCount returns how many ledgers or transactions a getLedgers or
-// getTransactions result holds, and 0 for any other result.
+// itemCount returns how many ledgers, transactions or events a read result
+// holds, and 0 for any other result. A getTransaction result counts 1 when it
+// found the transaction.
 func itemCount(res any) int {
 	switch r := res.(type) {
 	case protocol.GetLedgersResponse:
 		return len(r.Ledgers)
 	case protocol.GetTransactionsResponse:
 		return len(r.Transactions)
+	case protocol.GetTransactionResponse:
+		if r.Status == protocol.TransactionStatusNotFound {
+			return 0
+		}
+		return 1
+	case protocol.QueryEventsResponse:
+		return len(r.Events)
 	default:
 		return 0
 	}

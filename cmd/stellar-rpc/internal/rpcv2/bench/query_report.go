@@ -23,12 +23,16 @@ const (
 	queryTypeLedgers = "ledgers"
 	// queryTypeTxPage is getTransactions' paged ledger read.
 	queryTypeTxPage = "txpage"
+	// queryTypeTxHash is getTransaction's by-hash lookup.
+	queryTypeTxHash = "txhash"
+	// queryTypeEvents is queryEvents' event page read.
+	queryTypeEvents = "events"
 )
 
 // allQueryTypes is every --types value, in the default --types order.
 //
 //nolint:gochecknoglobals // fixed vocabulary, read-only
-var allQueryTypes = []string{queryTypeLedgers, queryTypeTxPage}
+var allQueryTypes = []string{queryTypeLedgers, queryTypeTxPage, queryTypeTxHash, queryTypeEvents}
 
 // latency.csv metric values.
 const (
@@ -38,10 +42,31 @@ const (
 	metricStartDelay     = "start_delay"
 )
 
+// outcomeLabelAll is the latency.csv outcome value of a row over every
+// successful request.
+const outcomeLabelAll = "all"
+
+// outcomeLabels holds the latency.csv outcome value of each lookupOutcome.
+//
+//nolint:gochecknoglobals // fixed report schema, read-only
+var outcomeLabels = [numOutcomes]string{
+	outcomeNone:             outcomeLabelAll,
+	outcomeFound:            "found",
+	outcomeNotFound:         "not_found",
+	outcomeUnfiltered:       "unfiltered",
+	outcomeFrequentContract: "frequent_contract",
+	outcomeFrequentPair:     "frequent_pair",
+	outcomeRareContract:     "rare_contract",
+	outcomeNoMatch:          "no_match",
+}
+
+// label is the latency.csv outcome value of o.
+func (o lookupOutcome) label() string { return outcomeLabels[o] }
+
 //nolint:gochecknoglobals // fixed report schema, read-only
 var (
 	latencyHeader = []string{
-		"query_type", "target_rps", "metric",
+		"query_type", "target_rps", "metric", "outcome",
 		"count", "items", "total_ns", "p50_ns", "p90_ns", "p99_ns", "max_ns",
 	}
 	scenariosHeader = []string{
@@ -74,33 +99,49 @@ type latencyRow struct {
 	queryType string
 	targetRPS float64
 	metric    string
+	outcome   string
 	agg       row
 }
 
-// latencyRows returns the scenario's latency.csv rows. A metric with no sample
-// has no row, and zero durations count as samples.
+// latencyRows returns the scenario's latency.csv rows, split by outcome
+// when the requests report one. A metric with no sample has no row, and zero
+// durations count as samples.
 func (s scenarioReport) latencyRows() []latencyRow {
 	var out []latencyRow
-	add := func(metric string, dist *series) {
+	add := func(metric, outcome string, dist *series) {
 		if r, ok := aggregate(metric, dist, true); ok {
-			out = append(out, latencyRow{s.queryType, s.targetRPS, metric, r})
+			out = append(out, latencyRow{s.queryType, s.targetRPS, metric, outcome, r})
 		}
 	}
-	timingRow := func(metric string, value func(requestTiming) time.Duration) {
-		dist := series{samples: make([]sample, 0, len(s.result.timings))}
+	// outcomeNone selects every successful request; each other outcome selects
+	// its own requests. counts holds the size of each selection.
+	var counts [numOutcomes]int
+	for _, t := range s.result.timings {
+		counts[t.outcome]++
+	}
+	counts[outcomeNone] = len(s.result.timings)
+	timingRow := func(metric string, o lookupOutcome, value func(requestTiming) time.Duration) {
+		dist := series{samples: make([]sample, 0, counts[o])}
 		for _, t := range s.result.timings {
-			dist.observe(value(t), t.items)
+			if o == outcomeNone || t.outcome == o {
+				dist.observe(value(t), t.items)
+			}
 		}
-		add(metric, &dist)
+		add(metric, o.label(), &dist)
 	}
-	timingRow(metricLatency, func(t requestTiming) time.Duration { return t.latency })
-	timingRow(metricHandlerLatency, func(t requestTiming) time.Duration { return t.handlerLatency })
-	timingRow(metricLatencyFromDue, func(t requestTiming) time.Duration { return t.latencyFromDue })
+	for o := range numOutcomes {
+		if o != outcomeNone && counts[o] == 0 {
+			continue
+		}
+		timingRow(metricLatency, o, func(t requestTiming) time.Duration { return t.latency })
+		timingRow(metricHandlerLatency, o, func(t requestTiming) time.Duration { return t.handlerLatency })
+		timingRow(metricLatencyFromDue, o, func(t requestTiming) time.Duration { return t.latencyFromDue })
+	}
 	startDelay := series{samples: make([]sample, 0, len(s.result.startDelays))}
 	for _, d := range s.result.startDelays {
 		startDelay.observe(d, 0)
 	}
-	add(metricStartDelay, &startDelay)
+	add(metricStartDelay, outcomeLabelAll, &startDelay)
 	return out
 }
 
@@ -121,11 +162,11 @@ func (s scenarioSummary) completionRPS() float64 {
 	return float64(s.succeeded) / s.result.elapsed.Seconds()
 }
 
-// aggregated returns the latency.csv row of metric, or false when the scenario
-// has none.
+// aggregated returns the latency.csv row of metric over all requests, or false
+// when the scenario has none.
 func (s scenarioSummary) aggregated(metric string) (row, bool) {
 	for _, r := range s.latency {
-		if r.metric == metric {
+		if r.metric == metric && r.outcome == outcomeLabelAll {
 			return r.agg, true
 		}
 	}
@@ -161,7 +202,7 @@ func (q *queryReport) write(outDir string) ([]string, error) {
 	for _, sc := range q.scenarios {
 		for _, r := range sc.latency {
 			latency = append(latency, []string{
-				r.queryType, formatRPS(r.targetRPS), r.metric,
+				r.queryType, formatRPS(r.targetRPS), r.metric, r.outcome,
 				strconv.Itoa(r.agg.n), strconv.Itoa(r.agg.items), nanos(r.agg.total),
 				nanos(r.agg.p50), nanos(r.agg.p90), nanos(r.agg.p99), nanos(r.agg.maxv),
 			})
