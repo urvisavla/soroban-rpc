@@ -89,17 +89,17 @@ jobs:
     uses: ./.github/workflows/integration-tests.yml
     with:
       protocol_version: '29'
-      core_deb_version: '29.0.0-3589.4eb833373.noble'
-      core_docker_img: 'stellar/stellar-core:29.0.0-3589.4eb833373.noble'
+      # Both legs run stellar-core 30.0.0; this one checks it at protocol 29.
+      core_deb_version: '30.0.0-3642.0e49751aa.noble'
+      core_docker_img: 'stellar/stellar-core:30.0.0-3642.0e49751aa.noble'
 
   integration-p30-pkg:
     name: Integration tests (P30)
     uses: ./.github/workflows/integration-tests.yml
     with:
       protocol_version: '30'
-      # stellar-core 30.0.0 release candidate.
       core_deb_version: '30.0.0-3642.0e49751aa.noble'
-      core_docker_img: 'stellar/unsafe-stellar-core:30.0.0-3642.0e49751aa.noble'
+      core_docker_img: 'stellar/stellar-core:30.0.0-3642.0e49751aa.noble'
 
   # integration-p25-src:
   #   name: Integration tests (p25, core from source)
