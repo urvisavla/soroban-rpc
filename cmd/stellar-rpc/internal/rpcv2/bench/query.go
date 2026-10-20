@@ -54,6 +54,7 @@ type queryFlags struct {
 	format           string
 	passphrase       string
 	seed             int64
+	evict            bool
 }
 
 func (f *queryFlags) bind(cmd *cobra.Command) {
@@ -85,6 +86,8 @@ func (f *queryFlags) bind(cmd *cobra.Command) {
 			"txpage need it to pair envelopes, and a wrong one fails the txhash pool build")
 	fs.Int64Var(&f.seed, "seed", defaultSeed,
 		"seed for the work each request picks, so a re-run reads the same ledgers")
+	fs.BoolVar(&f.evict, "evict-page-cache", true,
+		"request best-effort OS page-cache eviction of a cold dataset's frozen files before each scenario (Linux only)")
 }
 
 // plan parses and validates the flags.
@@ -119,6 +122,7 @@ func (f *queryFlags) plan() (queryPlan, error) {
 		Format:           f.format,
 		Passphrase:       f.passphrase,
 		Seed:             f.seed,
+		Evict:            f.evict,
 	}, nil
 }
 

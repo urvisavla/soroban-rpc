@@ -33,6 +33,13 @@ func (c *fakeScenarioClock) now() time.Time {
 	return c.t
 }
 
+// advance moves the time forward by d.
+func (c *fakeScenarioClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
 func (c *fakeScenarioClock) waitUntil(ctx context.Context, t time.Time) error {
 	c.mu.Lock()
 	i := len(c.waits)

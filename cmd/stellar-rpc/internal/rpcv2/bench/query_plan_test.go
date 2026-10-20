@@ -3,6 +3,7 @@ package bench
 import (
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,6 +151,76 @@ func TestPlanRejectsUnrunnableScenarios(t *testing.T) {
 			f.warmup = tc.warmup
 			_, err := f.plan()
 			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+// --warmup defaults to 0 and --evict-page-cache to true, and cacheScenario
+// labels each combination of warmup and eviction.
+func TestQueryCacheControls(t *testing.T) {
+	cmd := newQueryCommand()
+	assert.Equal(t, "0", cmd.Flags().Lookup("warmup").DefValue)
+	assert.Equal(t, "true", cmd.Flags().Lookup("evict-page-cache").DefValue)
+
+	f := validQueryFlags()
+	f.evict = true
+	p, err := f.plan()
+	require.NoError(t, err)
+	assert.True(t, p.Evict)
+
+	for _, tc := range []struct {
+		warmup int
+		evict  bool
+		want   string
+	}{
+		{0, false, "existing-cache"},
+		{0, true, "cold-start"},
+		{1, false, "warm-run"},
+		{1, true, "warm-run"},
+	} {
+		assert.Equal(t, tc.want, cacheScenario(tc.warmup, tc.evict), "warmup %d, evict %v", tc.warmup, tc.evict)
+	}
+}
+
+// cacheControls runs eviction only when it is requested on a dataset with
+// frozen files and the platform supports it, and warns when the platform
+// cannot evict or a warmup follows the eviction.
+func TestCacheControls(t *testing.T) {
+	const (
+		unsupported = "cannot evict the page cache"
+		refill      = "refills the page cache"
+	)
+	onLinux := isLinux()
+	coldEviction, coldScenario, coldWarn, warmupWarn := evictionUnsupported, "existing-cache", unsupported, unsupported
+	if onLinux {
+		coldEviction, coldScenario, coldWarn, warmupWarn = evictionRequested, "cold-start", "", refill
+	}
+	for _, tc := range []struct {
+		name     string
+		warmup   int
+		evict    bool
+		paths    []string
+		eviction string
+		scenario string
+		runs     bool
+		warn     string
+	}{
+		{"not requested", 0, false, []string{"a.pack"}, evictionOff, "existing-cache", false, ""},
+		{"hot dataset", 0, true, nil, evictionOff, "existing-cache", false, ""},
+		{"hot dataset with warmup", 3, true, nil, evictionOff, "warm-run", false, ""},
+		{"cold dataset", 0, true, []string{"a.pack"}, coldEviction, coldScenario, onLinux, coldWarn},
+		{"cold dataset with warmup", 3, true, []string{"a.pack"}, coldEviction, "warm-run", onLinux, warmupWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger, output := capturingLogger()
+			settings := map[string]string{}
+			evict := cacheControls(logger, queryPlan{Warmup: tc.warmup, Evict: tc.evict},
+				&queryDataset{EvictPaths: tc.paths}, settings)
+			assert.Equal(t, map[string]string{"pageCacheEviction": tc.eviction, "cacheScenario": tc.scenario}, settings)
+			assert.Equal(t, tc.runs, evict != nil)
+			for _, warning := range []string{unsupported, refill} {
+				assert.Equal(t, warning == tc.warn, strings.Contains(output.String(), warning), warning)
+			}
 		})
 	}
 }

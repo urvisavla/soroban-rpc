@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -79,6 +80,7 @@ func TestQueryScenarioKeepsRequestFailures(t *testing.T) {
 			_, rows := readCSVTable(t, filepath.Join(out, queryScenariosFile))
 			require.Len(t, rows, 1)
 			assert.Equal(t, "4", rows[0]["planned"])
+			assert.Empty(t, rows[0]["page_cache_evict_ns"], "no eviction was requested")
 		})
 	}
 }
@@ -131,6 +133,28 @@ func TestQueryScenarioCanceled(t *testing.T) {
 			assert.Contains(t, output.String(), "is PARTIAL: canceled after")
 		})
 	}
+}
+
+// The eviction before a scenario is timed into its page_cache_evict_ns column.
+func TestQueryScenarioEviction(t *testing.T) {
+	req := func(context.Context, *rand.Rand) (requestTiming, error) {
+		return requestTiming{latency: time.Microsecond, items: 1}, nil
+	}
+	logger, _ := capturingLogger()
+	clock := &fakeScenarioClock{}
+	run := testQueryRun(logger, queryPlan{Duration: 4 * time.Millisecond}, clock)
+	run.evict = func(context.Context) error {
+		clock.advance(30 * time.Millisecond)
+		return nil
+	}
+	require.NoError(t, run.scenario(context.Background(), queryTypeLedgers, 1000, req))
+
+	out := t.TempDir()
+	_, err := run.report.write(out)
+	require.NoError(t, err)
+	_, rows := readCSVTable(t, filepath.Join(out, queryScenariosFile))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "30000000", rows[0]["page_cache_evict_ns"])
 }
 
 // Each latency row under minLatencyRowSamples warns, whatever its outcome;
@@ -262,8 +286,8 @@ func runQueryCommand(t *testing.T, args ...string) (runRecord, []map[string]stri
 	return record, rows
 }
 
-// A hot run records the store open time, the response format and the handler
-// concurrency.
+// A hot run records the store open time, the response format, the handler
+// concurrency and the cache settings.
 func TestQueryHotCommandRecordsRun(t *testing.T) {
 	hotRoot := ingestHotChunk(t)
 	record, rows := runQueryCommand(t, "--data-dir", hotRoot,
@@ -275,6 +299,10 @@ func TestQueryHotCommandRecordsRun(t *testing.T) {
 	assert.Equal(t, protocol.FormatJSON, record.Settings["format"])
 	assert.Equal(t, tierHot, record.Settings["tier"])
 	assert.Equal(t, strconv.Itoa(runtime.NumCPU()), record.Settings["handlerConcurrency"])
+	assert.Equal(t, "existing-cache", record.Settings["cacheScenario"])
+	assert.Equal(t, "0", rows[0]["warmup_planned"])
+	assert.Equal(t, "off", record.Settings["pageCacheEviction"])
+	assert.Empty(t, rows[0]["page_cache_evict_ns"])
 }
 
 // A hot run whose ledgers limit covers the whole sampled dataset records
@@ -304,12 +332,21 @@ func ingestColdChunk(t *testing.T) string {
 }
 
 // A cold run serves every query type at two rates, type by type, and records
-// the store open time, the tier and the pool settings in run.json.
+// the tier, the cache settings and the pool settings in run.json and, on
+// Linux, the eviction time of each scenario.
 func TestQueryColdCommandRecordsRun(t *testing.T) {
 	coldRoot := ingestColdChunk(t)
 	record, rows := runQueryCommand(t, "--data-dir", coldRoot,
 		"--types", strings.Join(allQueryTypes, ","), "--target-rps", "1000,2000", "--duration", "10ms")
 	assert.Equal(t, tierCold, record.Settings["tier"])
+	onLinux := isLinux()
+	if onLinux {
+		assert.Equal(t, "cold-start", record.Settings["cacheScenario"])
+		assert.Equal(t, "requested", record.Settings["pageCacheEviction"])
+	} else {
+		assert.Equal(t, "existing-cache", record.Settings["cacheScenario"])
+		assert.Equal(t, "unsupported-on-this-platform", record.Settings["pageCacheEviction"])
+	}
 	hashes, err := strconv.Atoi(record.Settings["txhashPoolHashes"])
 	require.NoError(t, err)
 	assert.Positive(t, hashes)
@@ -320,7 +357,50 @@ func TestQueryColdCommandRecordsRun(t *testing.T) {
 		assert.Equal(t, allQueryTypes[i/2], row["query_type"], "row %d", i)
 		assert.Equal(t, []string{"1000", "2000"}[i%2], row["target_rps"], "row %d", i)
 		assert.Equal(t, "0", row["failed"], row["query_type"])
+		if onLinux {
+			assert.NotEmpty(t, row["page_cache_evict_ns"], row["query_type"])
+		} else {
+			assert.Empty(t, row["page_cache_evict_ns"], row["query_type"])
+		}
 	}
+}
+
+// A cold dataset lists the frozen ledger and events files of its chunks and the
+// tx-hash window index as eviction paths; a hot dataset lists none.
+func TestDatasetEvictPaths(t *testing.T) {
+	coldRoot := ingestColdChunk(t)
+	ds, release, err := openDataset(testLogger(), queryOptions{DataDir: coldRoot, Plan: testPlan(protocol.FormatBase64)})
+	require.NoError(t, err)
+	defer release()
+
+	layout := geometry.NewLayout(coldRoot)
+	want := append(layout.EventsPaths(0),
+		layout.LedgerPackPath(0),
+		layout.TxHashIndexFilePath(geometry.TxHashIndexCoverage{Index: 0, Lo: 0, Hi: 0}))
+	assert.ElementsMatch(t, want, ds.EvictPaths)
+	for _, path := range ds.EvictPaths {
+		assert.FileExists(t, path)
+	}
+
+	hot, releaseHot, err := openDataset(testLogger(), queryOptions{
+		DataDir: ingestHotChunk(t), Plan: testPlan(protocol.FormatBase64),
+	})
+	require.NoError(t, err)
+	defer releaseHot()
+	assert.Empty(t, hot.EvictPaths)
+}
+
+// A frozen file that the catalog lists but that does not exist fails the open,
+// even when no requested query type reads it.
+func TestDatasetMissingFrozenFile(t *testing.T) {
+	coldRoot := ingestColdChunk(t)
+	missing := geometry.NewLayout(coldRoot).EventsPaths(0)[0]
+	require.NoError(t, os.Remove(missing))
+	plan := testPlan(protocol.FormatBase64)
+	plan.Types = []string{queryTypeLedgers}
+	_, _, err := openDataset(testLogger(), queryOptions{DataDir: coldRoot, Plan: plan})
+	require.ErrorIs(t, err, fs.ErrNotExist)
+	assert.ErrorContains(t, err, "the catalog lists "+missing+" as frozen")
 }
 
 // scenarios builds each type's pool once and runs every rate on it.

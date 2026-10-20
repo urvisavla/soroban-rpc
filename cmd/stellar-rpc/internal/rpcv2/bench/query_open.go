@@ -173,6 +173,13 @@ func openDataset(logger *supportlog.Entry, opts queryOptions) (*queryDataset, fu
 		release()
 		return nil, nil, err
 	}
+	var evictPaths []string
+	if tier == tierCold {
+		if evictPaths, err = coldArtifactPaths(cat, chunks); err != nil {
+			release()
+			return nil, nil, err
+		}
+	}
 	ds := &queryDataset{
 		registry:    registry,
 		Passphrase:  opts.Plan.Passphrase,
@@ -180,6 +187,7 @@ func openDataset(logger *supportlog.Entry, opts queryOptions) (*queryDataset, fu
 		Chunks:      chunks,
 		FirstLedger: floor.FirstLedger(),
 		LastLedger:  served,
+		EvictPaths:  evictPaths,
 	}
 	release = ds.serveReads(logger, release)
 	if err := ds.verifyServes(opts.Plan.Types); err != nil {
@@ -215,6 +223,41 @@ func servedBounds(cat *catalog.Catalog, opts queryOptions) (chunk.ID, uint32, er
 		return 0, 0, fmt.Errorf("the dataset ends at ledger %d, before chunk %s", last, floor)
 	}
 	return floor, last, nil
+}
+
+// coldArtifactPaths lists the frozen files that queries read: the ledger and
+// events files of chunks, plus every frozen tx-hash index file in the catalog. A
+// listed file that does not exist is an error.
+func coldArtifactPaths(cat *catalog.Catalog, chunks []chunk.ID) ([]string, error) {
+	layout := cat.Layout()
+	var paths []string
+	for _, c := range chunks {
+		// No query reads the per-chunk tx-hash .bin, and backfill can delete it.
+		for _, kind := range []geometry.Kind{geometry.KindLedgers, geometry.KindEvents} {
+			state, err := cat.State(c, kind)
+			if err != nil {
+				return nil, fmt.Errorf("read the state of chunk %s %s: %w", c, kind, err)
+			}
+			if state == geometry.StateFrozen {
+				paths = append(paths, layout.ArtifactPaths(c, kind)...)
+			}
+		}
+	}
+	covs, err := cat.AllTxHashIndexKeys()
+	if err != nil {
+		return nil, fmt.Errorf("list tx-hash index coverages: %w", err)
+	}
+	for _, cov := range covs {
+		if cov.State == geometry.StateFrozen {
+			paths = append(paths, layout.TxHashIndexFilePath(cov))
+		}
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("the catalog lists %s as frozen: %w", path, err)
+		}
+	}
+	return paths, nil
 }
 
 // requireLiveChunk checks that the dataset ending at last has its live chunk,

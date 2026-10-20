@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"slices"
@@ -27,6 +28,46 @@ type queryPlan struct {
 	Format           string
 	Passphrase       string
 	Seed             int64
+
+	// Evict requests page-cache eviction of a cold dataset's frozen files
+	// before each scenario.
+	Evict bool
+}
+
+// settings.pageCacheEviction values.
+const (
+	evictionOff         = "off"
+	evictionRequested   = "requested"
+	evictionUnsupported = "unsupported-on-this-platform"
+)
+
+// evictionState is the settings.pageCacheEviction value. requested reports
+// whether the run asks to evict at least one file.
+func evictionState(requested bool) string {
+	switch {
+	case !requested:
+		return evictionOff
+	case evictSupported:
+		return evictionRequested
+	default:
+		return evictionUnsupported
+	}
+}
+
+// cacheScenario is the settings.cacheScenario value: the page-cache state when
+// measurement starts. cold-start means that eviction ran and no warmup ran.
+// warm-run means that warmup iterations ran, after the eviction when one ran.
+// existing-cache means that neither ran. The requests fill the cache during the
+// scenario, so the label does not describe the cache after measurement starts.
+func cacheScenario(warmup int, evict bool) string {
+	switch {
+	case warmup > 0:
+		return "warm-run"
+	case evict:
+		return "cold-start"
+	default:
+		return "existing-cache"
+	}
 }
 
 // queryDataset is what one bench query run reads: the registry over the files
@@ -48,6 +89,10 @@ type queryDataset struct {
 
 	// FirstLedger and LastLedger bound the ledgers the requests read.
 	FirstLedger, LastLedger uint32
+
+	// EvictPaths are the frozen files to evict from the page cache; empty for a
+	// hot dataset.
+	EvictPaths []string
 }
 
 // serveReads starts ds's read server and returns a release that closes it
@@ -89,6 +134,41 @@ func (ds *queryDataset) verifyServes(types []string) error {
 		}
 	}
 	return nil
+}
+
+// evictColdArtifacts requests page-cache eviction of EvictPaths.
+func (ds *queryDataset) evictColdArtifacts(ctx context.Context) error {
+	for _, path := range ds.EvictPaths {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := evictFile(path); err != nil {
+			return fmt.Errorf("evict from the page cache: %w", err)
+		}
+	}
+	return nil
+}
+
+// cacheControls records the run's cache settings and returns the eviction to
+// run before each scenario, or nil when no eviction runs.
+func cacheControls(
+	logger *supportlog.Entry, p queryPlan, ds *queryDataset, settings map[string]string,
+) func(context.Context) error {
+	state := evictionState(p.Evict && len(ds.EvictPaths) > 0)
+	switch {
+	case state == evictionUnsupported:
+		logger.Warn("--evict-page-cache is set, but this platform cannot evict the page cache; " +
+			"each scenario starts from the existing cache")
+	case state == evictionRequested && p.Warmup > 0:
+		logger.Warn("--warmup refills the page cache that the eviction dropped; " +
+			"pass --warmup 0 to measure from a cold cache")
+	}
+	settings["pageCacheEviction"] = state
+	settings["cacheScenario"] = cacheScenario(p.Warmup, state == evictionRequested)
+	if state != evictionRequested {
+		return nil
+	}
+	return ds.evictColdArtifacts
 }
 
 // chunkRange returns the ascending chunk IDs in [start, end]. The caller must
