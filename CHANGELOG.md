@@ -8,6 +8,11 @@
 ### Added
 * Added Protocol 30 support. The preflight hosts have been rotated to soroban-env-host 30.0.0 (29.0.0 for the previous protocol) ([#1050](https://github.com/stellar/stellar-rpc/pull/1050)).
 
+## [v29.0.1](https://github.com/stellar/stellar-rpc/compare/v29.0.0...v29.0.1)
+
+### Fixed
+* The protocol 29 preflight host is now soroban-env-host 29.0.1, which builds against the same `soroban-wasmi` as the protocol 29 host in stellar-core 29.0.0. The protocol 28 host is now built from the rs-soroban-env v28.0.1 commit, the same code as the crates.io 28.0.1 release, so that each host can use its own `soroban-wasmi` build.
+
 ## [v29.0.0](https://github.com/stellar/stellar-rpc/compare/v28.0.1...v29.0.0)
 
 ### Added
