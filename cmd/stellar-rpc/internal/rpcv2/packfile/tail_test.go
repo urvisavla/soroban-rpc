@@ -3,6 +3,7 @@ package packfile
 import (
 	"encoding/binary"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,14 +11,17 @@ import (
 )
 
 type readLog struct {
-	*os.File
+	readAtCloser
 
+	mu    sync.Mutex
 	reads [][2]int64
 }
 
 func (l *readLog) ReadAt(p []byte, off int64) (int, error) {
+	l.mu.Lock()
 	l.reads = append(l.reads, [2]int64{off, int64(len(p))})
-	return l.File.ReadAt(p, off)
+	l.mu.Unlock()
+	return l.readAtCloser.ReadAt(p, off)
 }
 
 func TestOpenFirstRead(t *testing.T) {
@@ -34,13 +38,15 @@ func TestOpenFirstRead(t *testing.T) {
 		f, err := os.Open(path)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = f.Close() })
-		log := &readLog{File: f}
+		log := &readLog{readAtCloser: f}
 		res := openFile(log, fileSize, firstRead)
 		return res, log.reads
 	}
 	fixed := func(n int) func(int64) int { return func(int64) int { return n } }
 
 	trailerThenRest := [][2]int64{{fileSize - trailerSize, trailerSize}, {tailStart, tailSize - trailerSize}}
+	// The default read starts on the first page boundary inside the last 256 KiB.
+	defaultStart := (fileSize - 256<<10 + pageSize - 1) &^ (pageSize - 1)
 	cases := []struct {
 		name      string
 		firstRead func(int64) int
@@ -51,7 +57,7 @@ func TestOpenFirstRead(t *testing.T) {
 		{"zero", fixed(0), trailerThenRest},
 		{"negative", fixed(-1), trailerThenRest},
 		{"past the file", fixed(int(fileSize) + 1), [][2]int64{{0, fileSize}}},
-		{"nil means 256 KiB", nil, [][2]int64{{fileSize - 256<<10, 256 << 10}}},
+		{"nil means 256 KiB", nil, [][2]int64{{defaultStart, fileSize - defaultStart}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
