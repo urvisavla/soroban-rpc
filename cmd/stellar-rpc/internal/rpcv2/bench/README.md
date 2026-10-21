@@ -204,6 +204,56 @@ at the end.
 | `eventsPool` | Labels of the filter sets in the events pool, comma-joined |
 | `fixedReadRange` | Types whose requests read the same ledgers each time |
 
+### `bench.txt`
+
+`bench query` writes `bench.txt` in Go benchmark format, for `benchstat`. It
+writes the file only when every scenario succeeds. Use it only when `run.json`
+has `status` `ok`: if the process stops or the last `run.json` write fails,
+`status` stays `running`.
+
+After the `goos` and `goarch` lines, the file has one line for each scenario,
+in run order. For `txhash` and `events`, when two or more outcomes have
+samples, one line for each outcome follows. The name of an outcome line ends
+with `/outcome=` and the `latency.csv` outcome, for example
+`/outcome=no_match`.
+
+```
+BenchmarkQuery/tier=cold/type=ledgers/rps=10	600	812345 ns/op	790123 p50-ns	2345678 p99-ns	301234 handler-p50-ns	901234 handler-p99-ns	2400000 p99-from-due-ns	10 items/op	0 dropped
+```
+
+| Field | Value |
+|---|---|
+| Name | `tier` is `settings.tier`. `type` and `rps` are `query_type` and `target_rps`. |
+| Iterations | `succeeded`. On an outcome line, `count` of the outcome. When no request succeeded, `planned`. |
+| `ns/op` | `total_ns / count` of `latency`, in whole nanoseconds |
+| `p50-ns`, `p99-ns` | `latency` percentiles |
+| `handler-p50-ns`, `handler-p99-ns` | `handler_latency` percentiles |
+| `p99-from-due-ns` | `latency_from_due` p99 |
+| `items/op` | `items / count` of `latency` |
+| `dropped` | `dropped`. Not on an outcome line. When no request succeeded, the only field. |
+
+The CPU profile of the scenario in the example is `cpu.ledgers.10rps.pprof`.
+
+To compare two builds, run each build 6 times or more on the same host, with
+the same dataset and flags. Then:
+
+```
+cat old-*/bench.txt > old.txt
+cat new-*/bench.txt > new.txt
+benchstat -filter '/outcome:""' old.txt new.txt
+```
+
+This filter keeps one line for each scenario. Examine `dropped` first. If
+`dropped` changed, the two builds ran under different loads.
+
+That line of `txhash` and `events` mixes request kinds: found and not-found
+lookups, or the filter sets of the events pool. To compare one kind, use the
+outcome lines:
+
+```
+benchstat -filter '/type:txhash -/outcome:""' old.txt new.txt
+```
+
 ### Query types
 
 | Type | Request | `items` |

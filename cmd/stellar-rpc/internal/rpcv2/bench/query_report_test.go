@@ -6,9 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -305,6 +308,131 @@ func TestQueryReportAllDropped(t *testing.T) {
 	assert.NotContains(t, output.String(), "p50=")
 }
 
+// TestQueryReportBenchText tests the bench.txt lines of each scenario and
+// outcome.
+func TestQueryReportBenchText(t *testing.T) {
+	q := twoScenarioReport()
+	q.tier = tierCold
+	q.add(scenarioReport{
+		queryType: queryTypeEvents,
+		targetRPS: 2,
+		result: scenarioResult{
+			scenarioRecord: scenarioRecord{
+				startDelays: []time.Duration{0, 0},
+				timings: []requestTiming{
+					{
+						latency: 30 * time.Microsecond, latencyFromDue: 31 * time.Microsecond, items: 3,
+						outcome: outcomeFrequentContract,
+					},
+					{latency: 10 * time.Microsecond, latencyFromDue: 11 * time.Microsecond, outcome: outcomeNoMatch},
+				},
+				measured: phaseCounts{started: 2},
+			},
+			planned:  2,
+			schedule: time.Second,
+			elapsed:  time.Second,
+		},
+	})
+	q.add(scenarioReport{
+		queryType: queryTypeLedgers,
+		targetRPS: 100,
+		result: scenarioResult{
+			scenarioRecord: scenarioRecord{
+				startDelays: []time.Duration{0},
+				measured:    phaseCounts{dropped: 1},
+			},
+			planned:  1,
+			schedule: 10 * time.Millisecond,
+			elapsed:  10 * time.Millisecond,
+		},
+	})
+	cold := q.benchText()
+	assert.Equal(t, []string{
+		"goos: " + runtime.GOOS,
+		"goarch: " + runtime.GOARCH,
+		"BenchmarkQuery/tier=cold/type=ledgers/rps=10\t2\t2000000 ns/op\t1000000 p50-ns\t3000000 p99-ns" +
+			"\t500000 handler-p50-ns\t2000000 handler-p99-ns\t4000000 p99-from-due-ns\t5 items/op\t0 dropped",
+		"BenchmarkQuery/tier=cold/type=txhash/rps=0.5\t2\t15000 ns/op\t10000 p50-ns\t20000 p99-ns" +
+			"\t0 handler-p50-ns\t0 handler-p99-ns\t21000 p99-from-due-ns\t0.5 items/op\t1 dropped",
+		"BenchmarkQuery/tier=cold/type=txhash/rps=0.5/outcome=found\t1\t10000 ns/op\t10000 p50-ns" +
+			"\t10000 p99-ns\t0 handler-p50-ns\t0 handler-p99-ns\t12000 p99-from-due-ns\t1 items/op",
+		"BenchmarkQuery/tier=cold/type=txhash/rps=0.5/outcome=not_found\t1\t20000 ns/op\t20000 p50-ns" +
+			"\t20000 p99-ns\t0 handler-p50-ns\t0 handler-p99-ns\t21000 p99-from-due-ns\t0 items/op",
+		"BenchmarkQuery/tier=cold/type=events/rps=2\t2\t20000 ns/op\t10000 p50-ns\t30000 p99-ns" +
+			"\t0 handler-p50-ns\t0 handler-p99-ns\t31000 p99-from-due-ns\t1.5 items/op\t0 dropped",
+		"BenchmarkQuery/tier=cold/type=events/rps=2/outcome=frequent_contract\t1\t30000 ns/op\t30000 p50-ns" +
+			"\t30000 p99-ns\t0 handler-p50-ns\t0 handler-p99-ns\t31000 p99-from-due-ns\t3 items/op",
+		"BenchmarkQuery/tier=cold/type=events/rps=2/outcome=no_match\t1\t10000 ns/op\t10000 p50-ns" +
+			"\t10000 p99-ns\t0 handler-p50-ns\t0 handler-p99-ns\t11000 p99-from-due-ns\t0 items/op",
+		"BenchmarkQuery/tier=cold/type=ledgers/rps=100\t1\t1 dropped",
+		"",
+	}, strings.Split(cold, "\n"))
+
+	q.tier = tierHot
+	hot := q.benchText()
+	assert.Equal(t, strings.ReplaceAll(cold, "/tier=cold/", "/tier=hot/"), hot)
+
+	outDir := t.TempDir()
+	path, err := q.writeBench(outDir)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(outDir, queryBenchFile), path)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, q.benchText(), string(data))
+}
+
+// A scenario whose samples have one outcome gets only its aggregate line.
+func TestQueryReportBenchTextSingleOutcome(t *testing.T) {
+	q := &queryReport{tier: tierCold}
+	for _, sc := range []struct {
+		qtype   string
+		outcome lookupOutcome
+	}{{queryTypeTxHash, outcomeFound}, {queryTypeEvents, outcomeUnfiltered}} {
+		q.add(scenarioReport{
+			queryType: sc.qtype,
+			targetRPS: 1,
+			result: scenarioResult{
+				scenarioRecord: scenarioRecord{
+					startDelays: []time.Duration{0, 0},
+					timings: []requestTiming{
+						{latency: 10 * time.Microsecond, latencyFromDue: 10 * time.Microsecond, outcome: sc.outcome},
+						{latency: 30 * time.Microsecond, latencyFromDue: 30 * time.Microsecond, outcome: sc.outcome},
+					},
+					measured: phaseCounts{started: 2},
+				},
+				planned:  2,
+				schedule: 2 * time.Second,
+				elapsed:  2 * time.Second,
+			},
+		})
+	}
+
+	assert.Equal(t, []string{
+		"goos: " + runtime.GOOS,
+		"goarch: " + runtime.GOARCH,
+		"BenchmarkQuery/tier=cold/type=txhash/rps=1\t2\t20000 ns/op\t10000 p50-ns\t30000 p99-ns" +
+			"\t0 handler-p50-ns\t0 handler-p99-ns\t30000 p99-from-due-ns\t0 items/op\t0 dropped",
+		"BenchmarkQuery/tier=cold/type=events/rps=1\t2\t20000 ns/op\t10000 p50-ns\t30000 p99-ns" +
+			"\t0 handler-p50-ns\t0 handler-p99-ns\t30000 p99-from-due-ns\t0 items/op\t0 dropped",
+		"",
+	}, strings.Split(q.benchText(), "\n"))
+}
+
+// Each outcome label and query type is a valid part of a benchstat name.
+func TestBenchNameParts(t *testing.T) {
+	procSuffix := regexp.MustCompile(`-[0-9]+$`)
+	parts := append(append([]string(nil), outcomeLabels[:]...), allQueryTypes...)
+	for _, part := range parts {
+		t.Run(part, func(t *testing.T) {
+			assert.NotEmpty(t, part)
+			assert.False(t, strings.ContainsFunc(part, unicode.IsSpace), "whitespace")
+			assert.NotContains(t, part, "/")
+			assert.NotContains(t, part, "=")
+			assert.False(t, procSuffix.MatchString(part), "a -N suffix reads as GOMAXPROCS")
+		})
+	}
+}
+
 // capturingLogger returns an Info-level logger and the buffer it writes to.
 func capturingLogger() (*supportlog.Entry, *bytes.Buffer) {
 	var output bytes.Buffer
@@ -325,4 +453,24 @@ func TestQueryReportLogSummary(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(output.String(), "first_error="))
 	assert.Contains(t, output.String(), "txhash   target_rps=0.5      warmup failed=1 first_error=warmup boom")
 	assert.Contains(t, output.String(), "txhash   target_rps=0.5      measured failed=1 first_error=measured boom")
+}
+
+// ns/op is the mean latency in whole nanoseconds.
+func TestQueryReportBenchMeanWholeNanos(t *testing.T) {
+	q := &queryReport{tier: tierCold}
+	q.add(scenarioReport{
+		queryType: queryTypeLedgers,
+		targetRPS: 1,
+		result: scenarioResult{
+			scenarioRecord: scenarioRecord{
+				startDelays: []time.Duration{0, 0, 0},
+				timings:     []requestTiming{{latency: 1}, {latency: 1}, {latency: 2}},
+				measured:    phaseCounts{started: 3},
+			},
+			planned:  3,
+			schedule: 3 * time.Second,
+			elapsed:  3 * time.Second,
+		},
+	})
+	assert.Contains(t, q.benchText(), "BenchmarkQuery/tier=cold/type=ledgers/rps=1\t3\t1 ns/op\t")
 }
