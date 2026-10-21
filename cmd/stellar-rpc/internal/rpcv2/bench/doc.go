@@ -22,6 +22,7 @@
 // the wait for a handler slot, the handler and the response write;
 // handler_latency covers the handler alone, read view included. HTTP and
 // network time are outside both. A run writes latency.csv and scenarios.csv.
+// README.md defines the datasets, the terms and the formulas.
 //
 // Before each scenario, a cold run asks the kernel to drop the dataset's
 // frozen files from the page cache (--evict-page-cache, Linux only). Then the
