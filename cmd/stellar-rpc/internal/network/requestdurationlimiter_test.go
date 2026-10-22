@@ -197,4 +197,3 @@ func TestJRPCRequestDurationLimiter_NoLimiting_Warn(t *testing.T) {
 	require.Equal(t, [7]int{0, 0, 0, 0, 1, 0, 0}, logCounter.writtenLogEntries)
 	shutdown()
 }
-

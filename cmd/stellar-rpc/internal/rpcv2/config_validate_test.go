@@ -136,6 +136,7 @@ func TestValidateConfig_RejectsMalformed(t *testing.T) {
 	}
 }
 
+//nolint:funlen // one declarative case table; length is its inventory
 func TestValidateConfig_RejectsMalformedService(t *testing.T) {
 	uintPtr := func(v uint) *uint { return &v }
 	uint32Ptr := func(v uint32) *uint32 { return &v }
