@@ -110,7 +110,8 @@ jobs:
       - name: Install Captive Core from debian package
         if: env.CORE_GIT_REF == ''
         shell: bash
-        run: sudo ./scripts/install-stellar-core.sh "$CORE_DEBIAN_PKG_VERSION"
+        # Unreleased core builds are only published to unstable.
+        run: sudo env CHANNELS="stable unstable" ./scripts/install-stellar-core.sh "$CORE_DEBIAN_PKG_VERSION"
 
       # Docker-compose's remote contexts on Ubuntu 20 started failing with an OpenSSL versioning error.
       # See https://stackoverflow.com/questions/66579446/error-executing-docker-compose-building-webserver-unable-to-prepare-context-un

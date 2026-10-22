@@ -45,7 +45,7 @@ import (
 
 const (
 	StandaloneNetworkPassphrase = "Standalone Network ; February 2017"
-	MaxSupportedProtocolVersion = 29
+	MaxSupportedProtocolVersion = 30
 	FriendbotURL                = "http://localhost:8000/friendbot"
 	// Needed when Core is run with ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING=true
 	checkpointFrequency               = 8
@@ -1021,12 +1021,16 @@ func (i *Test) InvokeHostFunc(
 }
 
 func (i *Test) upgradeLimits() {
-	limitFile := *i.limitFile
-	if limitFile == "" { // skip upgrade
+	limitName := *i.limitFile
+	if limitName == "" { // skip upgrade
 		return
 	}
 	// First enable settings upgrades in general.
 	i.upgradeLimitsWithFile("enable.xdr", "3500000")
+
+	limitFile, err := resolveLimitFile(upgradeFiles, limitName, i.protocolVersion)
+	require.NoError(i.t, err)
+	i.t.Logf("Applying limits from %s for protocol %d", limitFile, i.protocolVersion)
 
 	// The value below has to be one the second upgrade file sets and enable.xdr
 	// does not, or the wait returns on its first look and proves nothing. Both
@@ -1034,10 +1038,10 @@ func (i *Test) upgradeLimits() {
 	// already sets contract_data_entry_size_bytes to it.
 	// Add another case here if you add another upgrade file.
 	expected := "4294967295" // unlimited
-	if limitFile == "testnet" {
+	if limitName == "testnet" {
 		expected = "131072"
 	}
-	i.upgradeLimitsWithFile(fmt.Sprintf("%s.p%d.xdr", limitFile, i.protocolVersion), expected)
+	i.upgradeLimitsWithFile(limitFile, expected)
 }
 
 // upgradeLimitsWithFile applies one Core settings upgrade and waits for Core to
@@ -1047,7 +1051,7 @@ func (i *Test) upgradeLimits() {
 // first look and proves nothing.
 func (i *Test) upgradeLimitsWithFile(limitFile, expectInSorobanInfo string) {
 	newLimits, err := upgradeFiles.ReadFile(
-		filepath.Join("docker", "upgrades", limitFile))
+		path.Join(upgradesDir, limitFile))
 	require.NoError(i.t, err)
 
 	// Remove any extraneous whitespace from the file
