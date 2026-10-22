@@ -1,16 +1,13 @@
 // Package packfile implements an immutable, append-only file format with O(1)
 // positional access. Items are accumulated into fixed-size records, each
 // optionally passed through a caller-supplied encoder and indexed by a
-// compact FOR-encoded offset table. An optional chunked SHA-256 content hash
-// covers the logical item stream for end-to-end integrity.
+// compact FOR-encoded offset table.
 package packfile
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash"
 	"math"
 	"os"
 	"sync"
@@ -62,7 +59,7 @@ type WriterOptions struct {
 	// Format is a caller-assigned identifier written to the trailer.
 	Format Format
 
-	// NewRecordEncoder, if non-nil, returns a per-worker RecordEncoder.
+	// NewRecordEncoder, if non-nil, returns a per-worker RecordEncoder (never nil).
 	// Called once per worker goroutine; the writer invokes Encode once per
 	// record before write and Close on shutdown. Callers supplying a stateful
 	// codec (e.g. zstd) should construct fresh state inside this constructor —
@@ -79,25 +76,11 @@ type WriterOptions struct {
 	// bytes on the way back in.
 	RecordChecksum RecordChecksum
 
-	// ContentHash enables SHA-256 content hashing over the logical item
-	// stream. The digest is stored in the trailer.
-	ContentHash bool
-
-	// ContentHashExtract, if non-nil, transforms each item into the bytes
-	// fed to the content hasher. Use it when items as received aren't the
-	// canonical hash input — e.g., to decompress pre-compressed items so
-	// the hash is stable across encoder versions.
-	//
-	// If nil, items are hashed as received by AppendItem. May be called
-	// concurrently from worker goroutines, so must be safe for concurrent
-	// invocation.
-	ContentHashExtract func(item []byte) ([]byte, error)
-
 	// Concurrency sets the number of parallel worker goroutines used when
-	// a record encoder or content hashing is enabled. 0 defaults to 1.
-	// Writers with neither a record encoder nor content hash ignore this
-	// value (records are written directly from the main goroutine). Values
-	// above runtime.NumCPU() tend to hurt throughput; pick a value ≤ NumCPU.
+	// a record encoder is set. 0 defaults to 1. Writers without a record
+	// encoder ignore this value (records are written directly from the main
+	// goroutine). Values above runtime.NumCPU() tend to hurt throughput; pick
+	// a value ≤ NumCPU.
 	Concurrency int
 
 	// BytesPerSync initiates background writeback of dirty pages every N bytes
@@ -117,32 +100,17 @@ type WriterOptions struct {
 
 // pendingRecord is sent from the main goroutine to a worker.
 type pendingRecord struct {
-	ordinal   uint32
-	data      []byte
-	forIndex  []byte // FOR index: [packed][1B W][4B min]; nil when itemsPerRecord==1
-	hashSizes []uint32
+	ordinal  uint32
+	data     []byte
+	forIndex []byte // FOR index: [packed][1B W][4B min]; nil when itemsPerRecord==1
 }
 
 // processedRecord is sent from a worker to runWriter once a pendingRecord
-// has had its codec applied (or been passed through) and its content-hash
-// chunk digest computed. digest is populated only when ContentHash is enabled.
+// has had its codec applied.
 type processedRecord struct {
 	ordinal uint32
-	data    []byte // sealed record bytes (encoded-or-raw payload + forIndex + CRC32C)
-	digest  [sha256.Size]byte
+	data    []byte // sealed record bytes (encoded payload + forIndex + CRC32C)
 	err     error
-}
-
-type hashWork struct {
-	data      []byte
-	hashSizes []uint32
-}
-
-// hashResult conveys a chunk digest (or an error from ContentHashExtract)
-// from the inner hash goroutine back to its worker.
-type hashResult struct {
-	digest [sha256.Size]byte
-	err    error
 }
 
 // encodeForIndex packs the per-record item sizes into the FOR group that
@@ -255,16 +223,10 @@ type Writer struct {
 	recordChecksum   bool
 	// recordBufPool recycles per-record payload buffers — borrowed in
 	// buildRecord, returned in writeRecord — so each flushed record
-	// avoids a fresh allocation. Pools *[]byte, mirroring sizesPool.
+	// avoids a fresh allocation. Pools *[]byte.
 	recordBufPool sync.Pool
 
-	// Content hash
-	contentHash        bool
-	contentHashExtract func([]byte) ([]byte, error)
-	digestHasher       hash.Hash // running SHA-256 over chunk digests; nil if !contentHash
-	sizesPool          sync.Pool // pooled []uint32 for hash goroutines
-
-	// Pipeline. Spawned when newRecordEncoder != nil OR contentHash; otherwise the
+	// Pipeline. Spawned when newRecordEncoder != nil; otherwise the
 	// writer is a pure passthrough and main writes records directly.
 	concurrency int
 	nextOrdinal uint32
@@ -317,23 +279,11 @@ func (w *Writer) cancel() {
 	}
 }
 
-//nolint:funcorder // helper for concurrent hash path; kept near Writer for readability
-func (w *Writer) getSizes() []uint32 {
-	if p := w.sizesPool.Get(); p != nil {
-		s, _ := p.(*[]uint32)
-		return (*s)[:w.itemsPerRecord]
-	}
-	return make([]uint32, w.itemsPerRecord)
-}
-
-//nolint:funcorder // paired with getSizes
-func (w *Writer) putSizes(s []uint32) { w.sizesPool.Put(&s) }
-
 // getRecordBuf borrows a record payload buffer with capacity >= need
 // (length 0). It is returned to the pool by writeRecord once the record
-// is durable. Mirrors getSizes.
+// is durable.
 //
-//nolint:funcorder // paired with putRecordBuf, mirrors getSizes/putSizes
+//nolint:funcorder // paired with putRecordBuf
 func (w *Writer) getRecordBuf(need int) []byte {
 	if bp, ok := w.recordBufPool.Get().(*[]byte); ok && cap(*bp) >= need {
 		return (*bp)[:0]
@@ -390,30 +340,25 @@ func Create(path string, opts WriterOptions) (*Writer, error) {
 	}
 
 	w := &Writer{
-		file:               f,
-		path:               path,
-		itemsPerRecord:     itemsPerRecord,
-		concurrency:        opts.Concurrency,
-		format:             opts.Format,
-		newRecordEncoder:   opts.NewRecordEncoder,
-		recordChecksum:     opts.RecordChecksum == ChecksumCRC32C,
-		contentHash:        opts.ContentHash,
-		contentHashExtract: opts.ContentHashExtract,
-		bytesPerSync:       int64(opts.BytesPerSync),
+		file:             f,
+		path:             path,
+		itemsPerRecord:   itemsPerRecord,
+		concurrency:      opts.Concurrency,
+		format:           opts.Format,
+		newRecordEncoder: opts.NewRecordEncoder,
+		recordChecksum:   opts.RecordChecksum == ChecksumCRC32C,
+		bytesPerSync:     int64(opts.BytesPerSync),
 	}
 
-	// Spawn the pipeline when there's CPU work (compress and/or hash).
+	// Spawn the pipeline when there's an encoder to run.
 	// Pure passthrough writes records directly from main.
-	if opts.NewRecordEncoder != nil || opts.ContentHash {
+	if opts.NewRecordEncoder != nil {
 		workers := max(w.concurrency, 1)
 		w.concurrency = workers
 		w.workCh = make(chan pendingRecord, workers)
 		w.resultCh = make(chan processedRecord, workers)
 		w.writerDone = make(chan error, 1)
 		w.cancelCh = make(chan struct{})
-		if opts.ContentHash {
-			w.digestHasher = sha256.New()
-		}
 
 		var recordWg sync.WaitGroup
 		for range workers {
@@ -429,31 +374,16 @@ func Create(path string, opts WriterOptions) (*Writer, error) {
 	return w, nil
 }
 
-// recordWorker reads work from workCh, compresses (or passes through),
-// computes the content-hash chunk digest in parallel, and ships the result.
+// recordWorker reads work from workCh, compresses, and ships the result.
 //
 //nolint:funcorder // pipeline helper; kept near runWriter
 func (w *Writer) recordWorker() {
-	var encoder RecordEncoder
-	if w.newRecordEncoder != nil {
-		encoder = w.newRecordEncoder()
-		if encoder != nil {
-			defer func() { _ = w.recordErr(encoder.Close()) }()
-		}
-	}
+	encoder := w.newRecordEncoder()
+	defer func() { _ = w.recordErr(encoder.Close()) }()
 	// Per-worker scratch for encoder output. The encoder writes into this
 	// buffer (growing it if necessary); it persists across iterations so
 	// steady-state Encode calls don't allocate.
 	var encScratch []byte
-
-	var hashIn chan hashWork
-	var hashOut chan hashResult
-	if w.contentHash {
-		hashIn = make(chan hashWork, 1)
-		hashOut = make(chan hashResult, 1)
-		go w.hashGoroutine(hashIn, hashOut)
-		defer close(hashIn)
-	}
 
 	for {
 		var work pendingRecord
@@ -467,90 +397,25 @@ func (w *Writer) recordWorker() {
 			}
 		}
 
-		if work.hashSizes != nil {
-			hashIn <- hashWork{data: work.data, hashSizes: work.hashSizes}
-		}
-
-		var compressErr error
-		if encoder != nil {
-			encScratch, compressErr = encoder.Encode(encScratch[:0], work.data)
-		}
-
-		var (
-			digest  [sha256.Size]byte
-			hashErr error
-		)
-		if work.hashSizes != nil {
-			res := <-hashOut
-			digest = res.digest
-			hashErr = res.err
-		}
-
-		if compressErr != nil {
+		var err error
+		encScratch, err = encoder.Encode(encScratch[:0], work.data)
+		if err != nil {
 			w.resultCh <- processedRecord{
 				ordinal: work.ordinal,
-				err:     fmt.Errorf("packfile: record %d compress: %w", work.ordinal, compressErr),
+				err:     fmt.Errorf("packfile: record %d compress: %w", work.ordinal, err),
 			}
 			return
 		}
-		if hashErr != nil {
-			w.resultCh <- processedRecord{
-				ordinal: work.ordinal,
-				err:     fmt.Errorf("packfile: record %d hash extract: %w", work.ordinal, hashErr),
-			}
-			return
-		}
-
-		if encoder != nil {
-			// Copy the encoded bytes into work.data, which the main goroutine
-			// pre-sized with spare capacity for the forIndex appended below
-			// (so the append on the next line doesn't reallocate).
-			work.data = append(work.data[:0], encScratch...)
-		}
+		// Copy the encoded bytes into work.data, which the main goroutine
+		// pre-sized with spare capacity for the forIndex appended below
+		// (so the append on the next line doesn't reallocate).
+		work.data = append(work.data[:0], encScratch...)
 		// Seal after the codec: the checksum has to cover the bytes that
 		// actually land on disk.
 		w.resultCh <- processedRecord{
 			ordinal: work.ordinal,
 			data:    sealRecord(work.data, work.forIndex, w.recordChecksum),
-			digest:  digest,
 		}
-	}
-}
-
-// hashGoroutine is the inner per-worker hash goroutine. Each chunk's items
-// are streamed into a SHA-256 via writeLenPrefixed (the shared content-hash
-// wire format), and the chunk digest is shipped back. Returns sizes to the
-// pool when done.
-//
-//nolint:funcorder // helper for recordWorker
-func (w *Writer) hashGoroutine(hashIn <-chan hashWork, hashOut chan<- hashResult) {
-	h := sha256.New()
-	for hw := range hashIn {
-		h.Reset()
-		offset := 0
-		var extractErr error
-		for _, size := range hw.hashSizes {
-			item := hw.data[offset : offset+int(size)]
-			offset += int(size)
-			toHash := item
-			if w.contentHashExtract != nil {
-				var err error
-				toHash, err = w.contentHashExtract(item)
-				if err != nil {
-					extractErr = err
-					break
-				}
-				if uint64(len(toHash)) > math.MaxUint32 {
-					extractErr = fmt.Errorf("packfile: extracted item size %d exceeds uint32 max", len(toHash))
-					break
-				}
-			}
-			writeLenPrefixed(h, toHash)
-		}
-		w.putSizes(hw.hashSizes)
-		var digest [sha256.Size]byte
-		h.Sum(digest[:0])
-		hashOut <- hashResult{digest: digest, err: extractErr}
 	}
 }
 
@@ -576,9 +441,6 @@ func (w *Writer) runWriter() {
 				// writeRecord already called recordErr.
 				w.abortPipeline(err)
 				return
-			}
-			if w.contentHash {
-				w.digestHasher.Write(r.digest[:])
 			}
 			nextOrdinal++
 		}
@@ -687,35 +549,21 @@ func (w *Writer) buildRecord() ([]byte, []byte) {
 }
 
 // flush dispatches the current record to the worker pipeline, or writes it
-// directly when the writer is in pure-passthrough mode (no encoder, no hash).
+// directly when the writer is in pure-passthrough mode (no encoder).
 //
 //nolint:funcorder // internal helper chains into recordWorker / writeRecord
 func (w *Writer) flush() error {
+	payload, forIndex := w.buildRecord()
 	if w.workCh == nil {
-		// Pure passthrough: no workers, no hash. Write directly.
-		payload, forIndex := w.buildRecord()
 		return w.writeRecord(sealRecord(payload, forIndex, w.recordChecksum))
 	}
-
-	var hashSizes []uint32
-	if w.contentHash {
-		hashSizes = w.getSizes()[:len(w.sizes)]
-		copy(hashSizes, w.sizes)
-	}
-
-	payload, forIndex := w.buildRecord()
-
 	select {
 	case <-w.cancelCh:
-		if hashSizes != nil {
-			w.putSizes(hashSizes)
-		}
 		return w.loadErr()
 	case w.workCh <- pendingRecord{
-		ordinal:   w.nextOrdinal,
-		data:      payload,
-		forIndex:  forIndex,
-		hashSizes: hashSizes,
+		ordinal:  w.nextOrdinal,
+		data:     payload,
+		forIndex: forIndex,
 	}:
 	}
 	w.nextOrdinal++
@@ -744,11 +592,6 @@ func (w *Writer) Finish(appData []byte) error {
 
 	w.offsets = append(w.offsets, w.pos)
 
-	var fileHash [32]byte
-	if w.contentHash {
-		w.digestHasher.Sum(fileHash[:0])
-	}
-
 	indexBytes, err := encodeIndex(w.offsets)
 	if err != nil {
 		return w.recordErr(err)
@@ -765,7 +608,7 @@ func (w *Writer) Finish(appData []byte) error {
 		}
 	}
 	//nolint:gosec // both sizes bounds-checked above
-	if err := w.writeTrailer(uint32(len(indexBytes)), uint32(len(appData)), fileHash, crc32c(appData)); err != nil {
+	if err := w.writeTrailer(uint32(len(indexBytes)), uint32(len(appData)), crc32c(appData)); err != nil {
 		return err
 	}
 	return w.finalize()
@@ -804,7 +647,7 @@ func (w *Writer) drainPipeline() error {
 }
 
 //nolint:funcorder // helper for Finish
-func (w *Writer) writeTrailer(indexSize, appDataSize uint32, fileHash [32]byte, appDataCRC uint32) error {
+func (w *Writer) writeTrailer(indexSize, appDataSize, appDataCRC uint32) error {
 	t := Trailer{
 		Version: version,
 		Format:  w.format,
@@ -816,8 +659,6 @@ func (w *Writer) writeTrailer(indexSize, appDataSize uint32, fileHash [32]byte, 
 		IndexForGroupSize: uint16(groupSize),
 		IndexSize:         indexSize,
 		AppDataSize:       appDataSize,
-		ContentHash:       fileHash,
-		HasContentHash:    w.contentHash,
 		HasRecordChecksum: w.recordChecksum,
 		AppDataCRC:        appDataCRC,
 	}
