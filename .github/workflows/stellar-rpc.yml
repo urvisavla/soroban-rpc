@@ -91,14 +91,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        protocol: ['28', '29']
+        protocol: ['29', '30']
         daemon: [rpcv1, rpcv2]
     uses: ./.github/workflows/integration-tests.yml
     with:
       protocol_version: ${{ matrix.protocol }}
       daemon: ${{ matrix.daemon }}
-      core_deb_version: '29.0.0-3589.4eb833373.noble'
-      core_docker_img: 'stellar/stellar-core:29.0.0-3589.4eb833373.noble'
+      # Every leg runs stellar-core 30.0.0; the P29 legs check it at protocol 29.
+      core_deb_version: '30.0.0-3642.0e49751aa.noble'
+      core_docker_img: 'stellar/stellar-core:30.0.0-3642.0e49751aa.noble'
 
   # integration-p25-src:
   #   name: Integration tests (p25, core from source)
